@@ -1,11 +1,6 @@
 """
-APP MAESTRO RENDER - VERSION LIVIANA - SIN CALCULOS PESADOS
-Todo el Kalman ya viene hecho del ESP32
-Render solo guarda, grafica y decide ON/OFF
-
-Para Render:
-pip install -r requirements.txt
-gunicorn app:app
+APP MAESTRO RENDER - VERSION CORREGIDA CON /api/riego
+Agregada ruta /api/riego?sector=1 que usan los ESP de bomba y valvula
 """
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
@@ -15,8 +10,7 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
-# DB en RAM - super liviana, no consume los 512MB gratis
-sensores = {}  # {"sector1_sensor1": {humedad:28.5, ...}}
+sensores = {}
 actuadores = {"bomba_principal":0, "sector1_valvula1":0}
 historico = []
 logs = []
@@ -85,7 +79,6 @@ def dash():
 
 @app.route('/api/datos', methods=['POST'])
 def datos():
-    # Render recibe dato YA FILTRADO por ESP32 - no calcula Kalman aqui
     j = request.get_json()
     if not j: return {"error":"no json"}, 400
     id_s = j.get('id','sector1_sensor1')
@@ -94,7 +87,6 @@ def datos():
     historico.append({"ts":j['ts'],"humedad":j.get('humedad'),"id":id_s})
     if len(historico)>100: historico.pop(0)
     log(f"RX {id_s} KF desde ESP32: Hum {j.get('humedad')}%")
-    # Decision super liviana - no consume RAM
     hum = j.get('humedad',100)
     if j.get('sector',1)==1:
         if hum < 30:
@@ -126,6 +118,32 @@ def comando():
         if dev=='bomba': key='bomba_principal'
         if dev=='valvula': key='sector1_valvula1'
         return {"device":key,"estado":actuadores.get(key,0)}
+
+# NUEVA RUTA QUE FALTABA - ESTA ES LA QUE USAN LOS ESP32 DE BOMBA Y VALVULA
+@app.route('/api/riego')
+def riego():
+    sector = request.args.get('sector', '1')
+    try:
+        sector_int = int(sector)
+    except:
+        sector_int = 1
+    
+    bomba_estado = actuadores.get('bomba_principal', 0)
+    valvula_estado = actuadores.get('sector1_valvula1', 0)
+    
+    # Log para debug
+    print(f"ESP sector {sector_int} consulta /api/riego -> bomba:{bomba_estado} valvula:{valvula_estado}")
+    
+    # Respuesta compatible con los ESP32 (claves bomba y valvula)
+    return jsonify({
+        "bomba": bool(bomba_estado),
+        "valvula": bool(valvula_estado),
+        "sector": sector_int,
+        "bomba_principal": bomba_estado,
+        "sector1_valvula1": valvula_estado,
+        "humedad_actual": sensores.get(f'sector{sector_int}_sensor1', {}).get('humedad', 0),
+        "timestamp": time.time()
+    })
 
 if __name__=='__main__':
     app.run(host='0.0.0.0',port=5000)
